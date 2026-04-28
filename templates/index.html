@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rover Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="left">
+      <h1>RPLIDAR + USB Camera + Rover Dashboard</h1>
+      <img src="/video_feed" id="video" alt="video">
+    </div>
+
+    <div class="right">
+      <div class="card"><h3>Status</h3><p id="status">--</p></div>
+      <div class="card"><h3>Decision</h3><p id="decision">--</p></div>
+      <div class="card"><h3>Front</h3><p id="front">--</p></div>
+      <div class="card"><h3>Left</h3><p id="left">--</p></div>
+      <div class="card"><h3>Right</h3><p id="right">--</p></div>
+      <div class="card"><h3>Camera</h3><p id="camera">--</p></div>
+      <div class="card"><h3>LiDAR</h3><p id="lidar">--</p></div>
+      <div class="card"><h3>Rover</h3><p id="rover">--</p></div>
+    </div>
+  </div>
+
+  <script>
+    async function refreshStatus() {
+      const r = await fetch("/api/status");
+      const d = await r.json();
+
+      document.getElementById("status").textContent = d.status;
+      document.getElementById("decision").textContent = d.decision;
+      document.getElementById("front").textContent = d.nearest_front_m;
+      document.getElementById("left").textContent = d.nearest_left_m;
+      document.getElementById("right").textContent = d.nearest_right_m;
+      document.getElementById("camera").textContent = `${d.camera_ok} (${d.camera_source})`;
+      document.getElementById("lidar").textContent = d.lidar_ok;
+      document.getElementById("rover").textContent = d.rover_ok;
+    }
+
+    setInterval(refreshStatus, 500);
+    refreshStatus();
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,28 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #111;
+  color: #eee;
+}
+
+.wrap {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 18px;
+  padding: 18px;
+}
+
+#video {
+  width: 100%;
+  border-radius: 10px;
+  border: 2px solid #333;
+  background: #000;
+}
+
+.card {
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
