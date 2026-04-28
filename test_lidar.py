@@ -1,49 +1,102 @@
-from rplidar import RPLidar
+import serial
 import time
+import threading
+from rplidar import RPLidar
 
+# =========================
+# ROVER SERIAL
+# =========================
+ser = serial.Serial("/dev/serial0", 115200, timeout=1)
+time.sleep(2)
+
+def send(x, z):
+    try:
+        cmd = f'{{"T":13,"X":{x},"Z":{z}}}\n'
+        ser.write(cmd.encode())
+    except:
+        pass
+
+
+# =========================
+# LIDAR
+# =========================
 LIDAR_PORT = "/dev/ttyUSB0"
+lidar = RPLidar(LIDAR_PORT, baudrate=115200)
 
 
-def min_distance(scan, angle_ranges):
-    vals = []
-    for quality, angle, distance_mm in scan:
-        if distance_mm <= 0:
-            continue
-        for a1, a2 in angle_ranges:
-            if a1 <= a2:
-                match = a1 <= angle <= a2
-            else:
-                match = angle >= a1 or angle <= a2
-            if match:
-                vals.append(distance_mm / 1000.0)
-                break
-    return min(vals) if vals else None
+# =========================
+# SHARED DATA
+# =========================
+front = 999
+left = 999
+right = 999
 
 
-def main():
-    lidar = RPLidar(LIDAR_PORT)
+# =========================
+# LIDAR THREAD
+# =========================
+def lidar_loop():
+    global front, left, right
 
     try:
-        print("LIDAR info:", lidar.get_info())
-        print("LIDAR health:", lidar.get_health())
-
         for scan in lidar.iter_scans():
-            front = min_distance(scan, [(330, 360), (0, 30)])
-            left = min_distance(scan, [(30, 90)])
-            right = min_distance(scan, [(270, 330)])
 
-            print(
-                f"Front: {front} m | Left: {left} m | Right: {right} m"
-            )
-            time.sleep(0.05)
+            f = []
+            l = []
+            r = []
 
-    except KeyboardInterrupt:
-        pass
-    finally:
-        lidar.stop()
-        lidar.stop_motor()
-        lidar.disconnect()
+            for _, angle, dist in scan:
+
+                d = dist / 1000.0
+
+                if 330 <= angle or angle <= 30:
+                    f.append(d)
+                elif 30 <= angle <= 90:
+                    l.append(d)
+                elif 270 <= angle <= 330:
+                    r.append(d)
+
+            front = min(f) if f else 999
+            left = min(l) if l else 999
+            right = min(r) if r else 999
+
+    except Exception as e:
+        print("LIDAR ERROR:", e)
 
 
-if __name__ == "__main__":
-    main()
+# =========================
+# CONTROL THREAD
+# =========================
+def control_loop():
+
+    while True:
+
+        print(f"F:{front:.2f} L:{left:.2f} R:{right:.2f}")
+
+        if front < 0.5:
+            if left > right:
+                send(0, 0.5)
+            else:
+                send(0, -0.5)
+        else:
+            send(0.25, 0)
+
+        time.sleep(0.1)
+
+
+# =========================
+# MAIN
+# =========================
+try:
+    t1 = threading.Thread(target=lidar_loop)
+    t1.daemon = True
+    t1.start()
+
+    control_loop()
+
+except KeyboardInterrupt:
+    send(0, 0)
+    lidar.stop()
+    lidar.stop_motor()
+    lidar.disconnect()
+    ser.close()

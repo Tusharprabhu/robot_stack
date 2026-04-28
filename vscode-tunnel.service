@@ -1,0 +1,16 @@
+[Unit]
+Description=VS Code Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurora
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOME=/home/aurora"
+ExecStart=/usr/bin/code tunnel
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
