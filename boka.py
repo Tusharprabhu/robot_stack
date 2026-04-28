@@ -30,11 +30,11 @@ SPD_TURN = 0.55
 SPD_REV = -0.18
 
 LOOP_HZ = 12
-RETRY_WAIT = 2.0
+RETRY_WAIT = 0.5  # Reduced from 2.0s to recover instantly from data checksum errors
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 
-_state = {"f": 9.9, "l": 9.9, "r": 9.9, "b": 9.9, "ok": False}
+_state = {"f": 9.9, "l": 9.9, "r": 9.9, "b": 9.9, "ok": False, "cmd": "Initializing", "info": "Waiting for LIDAR"}
 _lock = threading.Lock()
 _running = threading.Event()
 _running.set()
@@ -55,91 +55,199 @@ HTML_PAGE = """
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>RPLidar Text Display</title>
+    <title>Rover Dashboard Live</title>
     <style>
-        body { margin: 0; padding: 24px; background: #0a0e14; color: #d6e6f8; font-family: "Courier New", monospace; font-size: 16px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { font-size: 32px; margin: 0 0 20px 0; color: #58e6b0; }
-        .status { background: #0d1624; border: 1px solid #23405f; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
-        .status-line { margin: 8px 0; line-height: 1.8; }
-        .label { color: #90a6bf; font-weight: bold; display: inline-block; width: 120px; }
-        .value { color: #58e6b0; font-weight: bold; }
-        .offline { color: #ff6b6b; }
-        .near { color: #ffd166; }
-        .ok { color: #72f1bc; }
-        .grid { background: #0d1624; border: 1px solid #23405f; border-radius: 8px; padding: 16px; font-size: 12px; }
-        .grid-header { color: #90a6bf; margin-bottom: 8px; text-align: center; }
-        .grid-row { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; margin-bottom: 2px; }
-        .grid-cell { background: #11263d; border: 1px solid #244765; padding: 4px; text-align: center; border-radius: 2px; }
-        .grid-cell.obstacle { background: #ff6b6b; color: black; }
-        .grid-cell.near { background: #ffd166; color: black; }
-        .grid-cell.ok { background: #58e6b0; color: black; }
+        :root { --bg: #0f172a; --panel: #1e293b; --text: #94a3b8; --accent: #38bdf8; --danger: #f87171; --ok: #4ade80; --warn: #facc15; }
+        body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; }
+        .grid-layout { display: grid; grid-template-columns: 300px 1fr; gap: 20px; max-width: 1200px; margin: 0 auto; }
+        @media (max-width: 800px) { .grid-layout { grid-template-columns: 1fr; } }
+        .panel { background: var(--panel); border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+        h1, h2, h3 { color: white; margin-top: 0; font-weight: 500; }
+        .stat-box { margin-bottom: 20px; }
+        .stat-label { font-size: 0.85em; text-transform: uppercase; letter-spacing: 1px; color: var(--text); margin-bottom: 4px; }
+        .stat-value { font-size: 1.6em; font-weight: bold; color: var(--accent); }
+        .stat-sm { font-size: 1.1em; color: var(--text); font-weight: normal; }
+        
+        /* Command Display */
+        .cmd-display {
+            font-size: 2em; text-align: center; margin-bottom: 20px; padding: 15px; 
+            background: rgba(0, 0, 0, 0.3); border-radius: 8px; border: 2px solid var(--ok); 
+            text-transform: uppercase; letter-spacing: 2px; font-weight: bold; color: var(--ok);
+            transition: all 0.2s;
+        }
+        
+        /* Radar Canvas */
+        .radar-container {
+            position: relative; width: 100%; max-width: 600px; margin: 0 auto;
+            aspect-ratio: 1; border-radius: 50%; border: 2px solid #334155;
+            box-shadow: 0 0 30px rgba(56, 189, 248, 0.1); background: #0b1121;
+            overflow: hidden;
+        }
+        canvas { width: 100%; height: 100%; display: block; }
+        
+        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .online { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+        .offline { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>RPLidar Text Display</h1>
-        <div class="status">
-            <div class="status-line"><span class="label">LiDAR:</span><span id="lidarStatus" class="value">--</span></div>
-            <div class="status-line"><span class="label">Front:</span><span id="frontVal" class="value">-- m</span></div>
-            <div class="status-line"><span class="label">Back:</span><span id="backVal" class="value">-- m</span></div>
-            <div class="status-line"><span class="label">Left:</span><span id="leftVal" class="value">-- m</span></div>
-            <div class="status-line"><span class="label">Right:</span><span id="rightVal" class="value">-- m</span></div>
-            <div class="status-line"><span class="label">Scan:</span><span id="scanSeq" class="value">--</span></div>
-            <div class="status-line"><span class="label">Age:</span><span id="scanAge" class="value">-- ms</span></div>
+    <div class="grid-layout">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="panel" style="margin-bottom: 20px;">
+                <h2>System Status</h2>
+                <div style="margin-bottom: 20px; display: flex; align-items: center; color: white; font-size: 1.1em;">
+                    <span id="connDot" class="status-indicator offline"></span>
+                    <span id="connText">LIDAR Offline</span>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">LiDAR Device Info</div>
+                    <div class="stat-value stat-sm" id="lidarInfo">Waiting...</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Latency / Buffer</div>
+                    <div class="stat-value stat-sm"><span id="scanAge">--</span> ms (<span id="scanSeq">--</span>)</div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2>Distance Sensors</h2>
+                <div class="stat-box"><div class="stat-label">Front (0°)</div><div class="stat-value" id="valF">-- m</div></div>
+                <div class="stat-box"><div class="stat-label">Back (180°)</div><div class="stat-value" id="valB">-- m</div></div>
+                <div class="stat-box"><div class="stat-label">Left (90°)</div><div class="stat-value" id="valL">-- m</div></div>
+                <div class="stat-box"><div class="stat-label">Right (270°)</div><div class="stat-value" id="valR">-- m</div></div>
+            </div>
         </div>
-        <div class="grid">
-            <div class="grid-header">360° Sweep (12 sectors, 0°=front)</div>
-            <div id="gridContainer"></div>
+        
+        <!-- Main Content -->
+        <div class="main-content panel">
+            <h2>Live Navigator</h2>
+            <div class="cmd-display" id="cmdDisplay">Waiting for Instruction</div>
+            
+            <div class="radar-container">
+                <canvas id="lidarCanvas" width="800" height="800"></canvas>
+            </div>
         </div>
     </div>
-    <script>
-        function fmt(v) { return typeof v === "number" ? v.toFixed(2) : "--"; }
 
-        function formatGrid(points) {
-            const sectors = {};
-            for (let i = 0; i < 360; i += 30) sectors[i] = [];
-            for (const p of points) {
-                const sector = Math.round(p.a / 30) * 30 % 360;
-                sectors[sector].push(p.d);
+    <script>
+        const canvas = document.getElementById('lidarCanvas');
+        const ctx = canvas.getContext('2d');
+        const center = canvas.width / 2;
+        const maxRange = 4.0; // Draw up to 4 meters visually
+        const scale = center / maxRange;
+
+        function drawRadar(points) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid rings
+            ctx.lineWidth = 1.5;
+            for (let r = 1; r <= 4; r++) {
+                ctx.beginPath();
+                ctx.strokeStyle = r === 4 ? '#334155' : '#1e293b'; 
+                ctx.arc(center, center, r * scale, 0, 2 * Math.PI);
+                ctx.stroke();
+                
+                // Ring Labels
+                ctx.fillStyle = '#64748b';
+                ctx.font = '16px sans-serif';
+                ctx.fillText(r + 'm', center + 6, center - (r * scale) + 20);
             }
-            let html = '<div class="grid-row">';
-            for (let i = 0; i < 12; i++) {
-                const deg = i * 30;
-                const dists = sectors[deg];
-                const minDist = dists.length > 0 ? Math.min(...dists) : 9.9;
-                let cellClass = 'grid-cell';
-                const cellText = minDist < 9.0 ? minDist.toFixed(2) : '∞';
-                if (minDist < 0.6) cellClass += ' obstacle';
-                else if (minDist < 1.2) cellClass += ' near';
-                else if (minDist < 9.9) cellClass += ' ok';
-                const label = deg === 0 ? 'F' : deg === 180 ? 'B' : deg === 90 ? 'L' : deg === 270 ? 'R' : '';
-                html += `<div class="${cellClass}" title="${deg}°: ${cellText}m">${label || deg}</div>`;
+            
+            // Draw axes / crosshairs
+            ctx.strokeStyle = '#2d3b54';
+            ctx.beginPath();
+            ctx.moveTo(center, 0); ctx.lineTo(center, canvas.height);
+            ctx.moveTo(0, center); ctx.lineTo(canvas.width, center);
+            ctx.stroke();
+
+            // Draw Points
+            if (points && points.length) {
+                for (const p of points) {
+                    if (p.d > maxRange) continue;
+                    
+                    // Convert rover angle to canvas angle. 
+                    // Rover: 0 is Front. Canvas: 0 is Right, -90 is Top (Front).
+                    const canvasAngleRad = (p.a - 90) * Math.PI / 180;
+                    
+                    const x = center + (p.d * scale) * Math.cos(canvasAngleRad);
+                    const y = center + (p.d * scale) * Math.sin(canvasAngleRad);
+                    
+                    ctx.beginPath();
+                    if (p.d < 0.4) ctx.fillStyle = '#f87171'; // Danger
+                    else if (p.d < 1.0) ctx.fillStyle = '#facc15'; // Near
+                    else ctx.fillStyle = '#38bdf8'; // Safe
+                    ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
             }
-            html += '</div>';
-            return html;
+
+            // Draw Rover Avatar in Center
+            ctx.fillStyle = '#4ade80';
+            ctx.beginPath();
+            // Arrow pointing UP
+            ctx.moveTo(center, center - 24);
+            ctx.lineTo(center - 16, center + 20);
+            ctx.lineTo(center, center + 8);
+            ctx.lineTo(center + 16, center + 20);
+            ctx.fill();
         }
 
         async function refresh() {
             try {
                 const res = await fetch('/api/lidar');
                 const data = await res.json();
-                const status = document.getElementById('lidarStatus');
-                if (data.ok) { status.textContent = 'online'; status.className = 'value ok'; }
-                else { status.textContent = 'offline'; status.className = 'value offline'; }
-                document.getElementById('frontVal').textContent = fmt(data.f) + ' m';
-                document.getElementById('backVal').textContent = fmt(data.b) + ' m';
-                document.getElementById('leftVal').textContent = fmt(data.l) + ' m';
-                document.getElementById('rightVal').textContent = fmt(data.r) + ' m';
-                document.getElementById('scanSeq').textContent = data.scan_seq || '--';
+                
+                // Status markers
+                const dot = document.getElementById('connDot');
+                const txt = document.getElementById('connText');
+                if (data.ok) {
+                    dot.className = 'status-indicator online';
+                    txt.textContent = 'LIDAR Online Data Live';
+                } else {
+                    dot.className = 'status-indicator offline';
+                    txt.textContent = 'LIDAR Offline / Searching...';
+                }
+
+                // Info 
+                document.getElementById('lidarInfo').textContent = data.info || '--';
+                document.getElementById('scanSeq').textContent = data.scan_seq;
                 const ageMs = Math.max(0, Math.round((Date.now() / 1000 - (data.scan_ts || 0)) * 1000));
-                document.getElementById('scanAge').textContent = ageMs + ' ms';
-                document.getElementById('gridContainer').innerHTML = formatGrid(data.points || []);
+                document.getElementById('scanAge').textContent = ageMs;
+
+                // Format sensors
+                const fmt = v => (typeof v === 'number' && v < 9.0) ? v.toFixed(2) + ' m' : 'Clear (∞)';
+                document.getElementById('valF').textContent = fmt(data.f);
+                document.getElementById('valB').textContent = fmt(data.b);
+                document.getElementById('valL').textContent = fmt(data.l);
+                document.getElementById('valR').textContent = fmt(data.r);
+                
+                // Command Instruction Style
+                const cmdEl = document.getElementById('cmdDisplay');
+                cmdEl.textContent = data.cmd.toUpperCase();
+                if (data.cmd.includes('emergency') || data.cmd.includes('stop')) {
+                    cmdEl.style.color = 'var(--danger)'; cmdEl.style.borderColor = 'var(--danger)';
+                } else if (data.cmd.includes('slow') || data.cmd.includes('search') || data.cmd.includes('turn')) {
+                    cmdEl.style.color = 'var(--warn)'; cmdEl.style.borderColor = 'var(--warn)';
+                } else {
+                    cmdEl.style.color = 'var(--ok)'; cmdEl.style.borderColor = 'var(--ok)';
+                }
+
+                // Protect against frozen / static data
+                if (ageMs > 1000 || !data.ok) {
+                    drawRadar([]); // Clear map completely if data is older than 1 second
+                    if (data.ok) {
+                        dot.className = 'status-indicator offline';
+                        txt.textContent = 'DATA STALE - Waiting for new scan...';
+                    }
+                } else {
+                    drawRadar(data.points);
+                }
             } catch (e) { console.error(e); }
         }
 
-        setInterval(refresh, 120);
-        refresh();
+        setInterval(refresh, 60); // Faster refresh for visual snappiness
+        drawRadar([]);
     </script>
 </body>
 </html>
@@ -176,6 +284,8 @@ def api_lidar():
             "b": _state["b"],
             "l": _state["l"],
             "r": _state["r"],
+            "cmd": _state.get("cmd", "--"),
+            "info": _state.get("info", "--"),
             "max_range_m": MAX_VIS_RANGE_M,
             "points": _scan_points,
             "scan_seq": _scan_seq,
@@ -224,7 +334,9 @@ def lidar_thread() -> None:
             for baud in BAUD_LIDAR:
                 try:
                     lidar = RPLidar(LIDAR_PORT, baudrate=baud, timeout=2)
-                    lidar.get_info()
+                    info = lidar.get_info()
+                    with _lock:
+                        _state["info"] = f"Model {info.get('model', '?')}, Firmware {info.get('firmware', '?')}"
                     print(f"[LIDAR] connected @ {baud} baud")
                     break
                 except Exception:
@@ -241,41 +353,52 @@ def lidar_thread() -> None:
             with _lock:
                 _state["ok"] = True
 
-            for scan in lidar.iter_scans(max_buf_meas=300):
+            lidar.clean_input()
+            
+            # Track rolling minimums for each sector
+            min_f, min_b, min_l, min_r = 9.9, 9.9, 9.9, 9.9
+            points = []
+            
+            # Record initial time so first new_scan trigger doesn't have an empty timestamp
+            start_time = time.time()
+
+            # Increased max_buf_meas to 3000 to prevent buffer exhaustion on fast scanning (common on RPi)
+            for new_scan, quality, angle, dist in lidar.iter_measurements(max_buf_meas=3000):
                 if not _running.is_set():
                     break
 
-                f, b, l, r = [], [], [], []
-                points = []
+                if new_scan:
+                    # Filter out partial/empty sweeps when LiDAR is first booting up
+                    if time.time() - start_time > 0.05 and points:
+                        # A new 360 sweep started, update the global state with our fastest findings
+                        with _lock:
+                            _state["f"] = min_f if min_f < 8.0 else 9.9
+                            _state["b"] = min_b if min_b < 8.0 else 9.9
+                            _state["l"] = min_l if min_l < 8.0 else 9.9
+                            _state["r"] = min_r if min_r < 8.0 else 9.9
+                            _state["ok"] = True
+                            _scan_points[:] = points
+                            _scan_seq += 1
+                            _scan_ts = time.time()
+                    
+                    # Reset accumulators for the next sweep
+                    min_f, min_b, min_l, min_r = 9.9, 9.9, 9.9, 9.9
+                    points = []
+                    start_time = time.time()
 
-                for _, angle, dist in scan:
-                    d = dist / 1000.0
+                d = dist / 1000.0
+                if 0.05 < d < MAX_VIS_RANGE_M:
+                    points.append({"a": float(angle), "d": float(d)})
+                    
+                    # Instantly update running minimums
                     if angle >= 330 or angle <= 30:
-                        f.append(d)
+                        min_f = min(min_f, d)
                     elif 150 <= angle <= 210:
-                        b.append(d)
+                        min_b = min(min_b, d)
                     elif 30 < angle <= 100:
-                        l.append(d)
+                        min_l = min(min_l, d)
                     elif 260 <= angle < 330:
-                        r.append(d)
-
-                    if 0.05 < d < MAX_VIS_RANGE_M:
-                        points.append({"a": float(angle), "d": float(d)})
-
-                nf, nb, nl, nr = nearest(f), nearest(b), nearest(l), nearest(r)
-                with _lock:
-                    if nf is not None:
-                        _state["f"] = nf
-                    if nb is not None:
-                        _state["b"] = nb
-                    if nl is not None:
-                        _state["l"] = nl
-                    if nr is not None:
-                        _state["r"] = nr
-                    _state["ok"] = True
-                    _scan_points[:] = points
-                    _scan_seq += 1
-                    _scan_ts = time.time()
+                        min_r = min(min_r, d)
 
         except Exception as e:
             print(f"[LIDAR] {e} — retrying in {RETRY_WAIT}s")
@@ -310,6 +433,8 @@ def control_loop(ser: serial.Serial) -> None:
             ok = _state["ok"]
 
         x, z, label = decide(f, l, r, ok)
+        with _lock:
+            _state["cmd"] = label
         send(ser, x, z)
         print(f"  F:{f:.2f}  B:{b:.2f}  L:{l:.2f}  R:{r:.2f}   →   {label}")
 
@@ -328,13 +453,16 @@ def main() -> None:
 
     try:
         control_loop(ser)
-    except KeyboardInterrupt:
-        print("\n[INFO] ctrl-c — shutting down")
+    except Exception as e:
+        print(f"\n[INFO] shutdown — {e}")
     finally:
         _running.clear()
-        send(ser, 0, 0)
-        time.sleep(0.2)
-        ser.close()
+        try:
+            send(ser, 0, 0)
+            time.sleep(0.2)
+            ser.close()
+        except:
+            pass
         print("[INFO] done")
 
 
