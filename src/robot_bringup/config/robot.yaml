@@ -1,0 +1,19 @@
+sharewave_rover:
+  ros__parameters:
+    port: /dev/serial0
+    baud: 115200
+    protocol: T13
+    cmd_vel_topic: cmd_vel
+    cmd_timeout_sec: 0.5
+    max_linear: 0.5
+    max_angular: 1.5
+
+rplidar:
+  ros__parameters:
+    port: /dev/ttyUSB0
+    baudrates: [256000, 115200]
+    frame_id: laser
+    topic: scan
+    range_min: 0.05
+    range_max: 8.0
+    samples: 360
